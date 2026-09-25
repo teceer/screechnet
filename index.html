@@ -93,10 +93,13 @@
       <p><b>Private line.</b> Agree on a room key with your friend and both type it in. What leaves your speakers is then AES-GCM ciphertext: anyone listening to the call hears the screech but reads nothing. Read the 3-part key ID (e.g. <code>3F-A9-C2</code>) to each other to confirm you typed the same key. Don't say the key itself on the call. Your browser derives the key with PBKDF2 (600k rounds), and the key never leaves your device. Use a long passphrase: whoever records the call can try to guess it offline.</p>
       <p><b>How it works:</b> Like modern ham-radio modes such as FT8 and Olivia. The signal is 16-tone MFSK at 25 symbols per second, with a Costas array for sync, a K=7 convolutional code with soft Viterbi decoding, bit interleaving, and a re-sync marker plus CRC-16 on every 8-byte block. No server is involved. The only network is the phone call.</p>
     </div>
-    <a id="share" class="share" target="_blank" rel="noopener">Post it on X</a>
+    <div class="links">
+      <a id="share" class="share" target="_blank" rel="noopener">Post it on X</a>
+      <a id="source" class="share ghost" href="https://github.com/teceer/screechnet" target="_blank" rel="noopener">Source on GitHub</a>
+    </div>
   </section>
 
-  <footer>No servers. No packets. Just sound.</footer>
+  <footer>No servers. No packets. Just sound. · Anonymous usage stats, never your messages.</footer>
 </main>
 </body>
 </html>

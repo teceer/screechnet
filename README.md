@@ -46,6 +46,10 @@ Honest caveats: it is a toy, not Signal.
 - There is no forward secrecy and no replay protection.
 - A single lost FEC block makes an encrypted message unreadable.
 
+## Analytics
+
+The hosted page sends anonymous usage events to PostHog (EU cloud), proxied through `/ingest`. Every event is explicit, and there is no autocapture, no session recording and no cookies. Events: power on, message sent or received, decrypt result, handshake, share clicks. The only fields sent are counts and flags such as byte length, "encrypted" and "blocks lost". Message text, handles and room keys are never sent. Analytics is off on `localhost` and when the browser sends Do Not Track. See `analytics.js`. If you fork the project, swap in your own key or remove the import.
+
 ## Run locally
 
 The microphone needs `https://` or `localhost`.
@@ -71,6 +75,7 @@ The test has no dependencies and runs on Node 20+.
 | `crypto.js` | room key derivation, seal/open |
 | `rx-worklet.js` | AudioWorklet running the demodulator on the microphone |
 | `app.js` | UI: LEDs, waterfall, terminal, compose |
+| `analytics.js` | anonymous PostHog events (see Analytics) |
 
 ## License
 

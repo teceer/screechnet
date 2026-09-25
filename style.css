@@ -281,6 +281,10 @@ body {
   background: var(--ink); color: #111; text-decoration: none; font-weight: 600;
 }
 .share:hover { background: #fff; }
+.links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+.links .share { margin-top: 0; }
+.share.ghost { background: none; color: var(--ink); border: 1px solid #45463c; }
+.share.ghost:hover { background: #1f201a; }
 footer { text-align: center; color: #5c5a50; font-size: 12px; }
 
 @media (max-width: 600px) {
