@@ -27,6 +27,13 @@ if (!off) {
       autocapture: false,
       capture_pageview: true,
       capture_pageleave: true,
+      // the shared project's remote config turns these on; this page doesn't want them
+      // (dead clicks and heatmaps record what was clicked, which can be message text)
+      capture_dead_clicks: false,
+      capture_heatmaps: false,
+      capture_performance: false,
+      enable_recording_console_log: false,
+      capture_exceptions: true, // stack traces only: useful for spotting browsers where audio breaks
       disable_session_recording: true,
       disable_surveys: true,
       respect_dnt: true,
