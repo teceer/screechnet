@@ -1,11 +1,10 @@
-// Loopback test: modulate → fake phone line → demodulate, with every demodulator listening
-// to every transmission (so cross-mode false decodes are caught too).
+// Loopback test: modulate → fake phone line → demodulate.
 // The VoIP lines drop 20 ms packets, let a jitter buffer cut/duplicate 10 ms of audio (hard cuts,
 // harsher than a real WSOLA jitter buffer), wobble the gain like a phone AGC and add noise.
-// They are reported as statistics over random channels; TANK must keep most messages intact on "bad VoIP".
+// They are reported as statistics over random channels; most messages must stay intact on "bad VoIP".
 // Usage: node test/loopback.mjs
-import { MODES, encodeMessage, payloadBytes, splitPayload, FrameParser, BlockAssembler, synthHandshake } from '../modem.js';
-import { FskDemod, MfskDemod } from '../demod.js';
+import { MODE, encodeMessage, payloadBytes, splitPayload, BlockAssembler, synthHandshake } from '../modem.js';
+import { MfskDemod } from '../demod.js';
 import { deriveRoomKey, seal, open, SEAL_OVERHEAD } from '../crypto.js';
 
 function mulberry(a) {
@@ -61,126 +60,94 @@ function phoneLine(sig, fs, { snrDb, drift, gain, loss = 0, warp = 0, agc = 0 },
 }
 
 function receive(samples, fs) {
-  const results = MODES.map(() => []);
-  const demods = MODES.map((mode, k) => {
-    let text = '', nick = '';
-    const h = {
-      onNick: (v) => (nick = v),
-      onText: (s) => (text += s),
-      onEnd: ({ ok, reason, sealed }) => {
-        results[k].push({ ok, reason, nick, text, sealed });
-        text = '';
-      },
-    };
-    if (mode.type === 'mfsk') {
-      const a = new BlockAssembler(h), d = new MfskDemod(mode, fs);
-      d.onHeader = (len) => a.header(len);
-      d.onBlock = (b, ok) => a.block(b, ok);
-      d.onEnd = () => a.end();
-      d.onLost = () => a.carrierLost();
-      return d;
-    }
-    const p = new FrameParser(mode, h), d = new FskDemod(mode, fs);
-    d.onByte = (b) => p.push(b);
-    d.onCarrier = (on) => !on && p.carrierLost();
-    return d;
+  const results = [];
+  let text = '', nick = '';
+  const a = new BlockAssembler({
+    onNick: (v) => (nick = v),
+    onText: (s) => (text += s),
+    onEnd: ({ ok, reason, sealed }) => {
+      results.push({ ok, reason, nick, text, sealed });
+      text = '';
+    },
   });
-  for (const x of samples) for (const d of demods) d.push(x);
+  const d = new MfskDemod(MODE, fs);
+  d.onHeader = (len) => a.header(len);
+  d.onBlock = (b, ok) => a.block(b, ok);
+  d.onEnd = () => a.end();
+  d.onLost = () => a.carrierLost();
+  for (const x of samples) d.push(x);
   return results;
 }
 
 const TEXT = 'Hello from 1995! Naïve café, jalapeño & façade 🦖 ATDT';
+const PAYLOAD = payloadBytes('alice', TEXT).payload;
 const lines = [
   { name: 'clean', snrDb: 60, drift: 1, gain: 1 },
   { name: 'quiet+noisy 12dB', snrDb: 12, drift: 1.0002, gain: 0.05 },
   { name: 'rough 6dB, drift', snrDb: 6, drift: 0.9995, gain: 0.3 },
 ];
-const VOIP = {
-  'bad VoIP (5% loss, jitter ~2 s, 6 dB)': { snrDb: 6, drift: 1.0003, gain: 0.2, loss: 0.05, warp: 0.01, agc: 0.3 },
-  'brutal VoIP (8% loss, jitter ~0.5 s, 3 dB)': { snrDb: 3, drift: 1.0003, gain: 0.2, loss: 0.08, warp: 0.04, agc: 0.5 },
-};
-const MIN_TANK_INTACT = { 'bad VoIP (5% loss, jitter ~2 s, 6 dB)': 10 }; // of 12
+const VOIP = [
+  { name: 'bad VoIP (5% loss, jitter ~2 s, 6 dB)', need: 10, line: { snrDb: 6, drift: 1.0003, gain: 0.2, loss: 0.05, warp: 0.01, agc: 0.3 } },
+  { name: 'brutal VoIP (8% loss, jitter ~0.5 s, 3 dB)', line: { snrDb: 3, drift: 1.0003, gain: 0.2, loss: 0.08, warp: 0.04, agc: 0.5 } },
+];
 
-function trial(mode, line, fs, seed) {
-  const rnd = mulberry(seed);
-  const { samples } = encodeMessage(mode, payloadBytes('alice', TEXT).payload, fs);
-  const res = receive(phoneLine(samples, fs, line, rnd), fs);
-  const k = MODES.indexOf(mode);
-  const mine = res[k];
-  const good = mine.length === 1 && mine[0].ok && mine[0].text === TEXT && mine[0].nick === 'alice';
-  const okGhosts = res.filter((_, j) => j !== k).flat().filter((g) => g.ok).length;
-  return { good, okGhosts, mine };
+function trial(line, fs, seed, payload = PAYLOAD) {
+  const { samples } = encodeMessage(payload, fs);
+  const res = receive(phoneLine(samples, fs, line, mulberry(seed)), fs);
+  const good = res.length === 1 && res[0].ok && res[0].text === TEXT && res[0].nick === 'alice';
+  return { good, res };
 }
 
 let fail = 0;
+const check = (name, cond, detail = '') => {
+  if (!cond) fail++;
+  console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  ' + detail : ''}`);
+};
+
 for (const fs of [44100, 48000]) {
-  for (const mode of MODES) {
-    for (const line of lines) {
-      const { good, okGhosts, mine } = trial(mode, line, fs, fs + lines.indexOf(line) * 7 + MODES.indexOf(mode));
-      const required = !line.only || line.only === mode.id;
-      const pass = good && okGhosts === 0;
-      if (required && !pass) fail++;
-      const tag = pass ? 'PASS' : required ? 'FAIL' : 'miss';
-      console.log(`${tag}  ${fs}Hz  ${mode.name.padEnd(8)}  ${line.name.padEnd(18)}  ` +
-        (good ? 'decoded ok' : JSON.stringify(mine).slice(0, 110)) + (okGhosts ? `  GHOST FRAMES: ${okGhosts}` : ''));
-    }
+  for (const line of lines) {
+    const { good, res } = trial(line, fs, fs + lines.indexOf(line) * 7);
+    check(`${fs}Hz  ${line.name}`, good, good ? '' : JSON.stringify(res).slice(0, 120));
   }
-  const hs = receive(synthHandshake(fs).samples, fs).flat();
-  const hsPass = hs.every((r) => !r.ok);
-  if (!hsPass) fail++;
-  console.log(`${hsPass ? 'PASS' : 'FAIL'}  ${fs}Hz  handshake produces no valid frame (${hs.length} aborted)`);
+  const hs = receive(synthHandshake(fs).samples, fs);
+  check(`${fs}Hz  handshake produces no frame`, hs.length === 0);
 }
 
-// VoIP lines: messages fully intact / FEC blocks lost, per mode, over random channels.
-// (FSK modes have no blocks: one error kills the whole message.)
-const blocks = Math.ceil(payloadBytes('alice', TEXT).payload.length / 8);
-for (const [name, line] of Object.entries(VOIP)) {
-  console.log(`\n${name}, 12 random channels @48k:`);
-  for (const mode of MODES) {
-    let ok = 0, lost = 0;
-    for (let s = 0; s < 12; s++) {
-      const t = trial(mode, line, 48000, 1000 + s);
-      ok += t.good ? 1 : 0;
-      const m = t.mine[0]?.reason?.match(/(\d+)\/(\d+)/);
-      lost += t.good ? 0 : m ? +m[1] : blocks;
-    }
-    const need = mode.type === 'mfsk' ? MIN_TANK_INTACT[name] : undefined;
-    if (need !== undefined && ok < need) fail++;
-    console.log(`  ${need !== undefined ? (ok >= need ? 'PASS' : 'FAIL') : '    '}  ${mode.name.padEnd(8)} messages intact ${String(ok).padStart(2)}/12` +
-      (mode.type === 'mfsk' ? `   blocks lost ${lost}/${12 * blocks}` : ''));
+// VoIP lines: messages fully intact / FEC blocks lost over random channels.
+const blocks = Math.ceil(PAYLOAD.length / 8);
+for (const { name, need, line } of VOIP) {
+  let ok = 0, lost = 0;
+  for (let s = 0; s < 12; s++) {
+    const t = trial(line, 48000, 1000 + s);
+    ok += t.good ? 1 : 0;
+    const m = t.res[0]?.reason?.match(/(\d+)\/(\d+)/);
+    lost += t.good ? 0 : m ? +m[1] : blocks;
   }
+  const detail = `messages intact ${ok}/12, blocks lost ${lost}/${12 * blocks}`;
+  if (need === undefined) console.log(`      ${name}  ${detail}`);
+  else check(name, ok >= need, detail);
 }
 
 // Encryption: round trip, wrong key, tampering, and a sealed message over the air.
 {
-  const check = (name, cond) => {
-    if (!cond) fail++;
-    console.log(`${cond ? 'PASS' : 'FAIL'}  crypto  ${name}`);
-  };
-  const plain = payloadBytes('alice', TEXT).payload;
   const t0 = Date.now();
   const room = await deriveRoomKey('correct horse battery staple');
   const ms = Date.now() - t0;
   const other = await deriveRoomKey('correct horse battery stapler');
-  const sealed = await seal(room.key, plain);
-  check(`key derivation ${ms} ms, fingerprint ${room.fingerprint} vs ${other.fingerprint}`, room.fingerprint !== other.fingerprint);
-  check(`overhead ${sealed.length - plain.length} bytes`, sealed.length - plain.length === SEAL_OVERHEAD);
+  const sealed = await seal(room.key, PAYLOAD);
+  check(`crypto  key derivation ${ms} ms, fingerprints ${room.fingerprint} vs ${other.fingerprint}`, room.fingerprint !== other.fingerprint);
+  check(`crypto  overhead ${sealed.length - PAYLOAD.length} bytes`, sealed.length - PAYLOAD.length === SEAL_OVERHEAD);
   const back = await open(room.key, sealed);
-  check('round trip', back && splitPayload([...back]).text === TEXT);
-  check('wrong key refused', (await open(other.key, sealed)) === null);
+  check('crypto  round trip', back && splitPayload([...back]).text === TEXT);
+  check('crypto  wrong key refused', (await open(other.key, sealed)) === null);
   const bent = [...sealed];
   bent[20] ^= 4;
-  check('one flipped bit refused', (await open(room.key, bent)) === null);
-  check('two seals of the same text differ', JSON.stringify(await seal(room.key, plain)) !== JSON.stringify(sealed));
-
-  const tank = MODES[0], robust = MODES[1];
-  for (const [mode, line, seed] of [[tank, { snrDb: 6, drift: 1.0003, gain: 0.2, loss: 0.05, warp: 0.01, agc: 0.3 }, 7], [robust, lines[2], 8]]) {
-    const { samples } = encodeMessage(mode, sealed, 48000);
-    const res = receive(phoneLine(samples, 48000, line, mulberry(seed)), 48000)[MODES.indexOf(mode)];
-    const got = res[0]?.sealed && (await open(room.key, res[0].sealed));
-    check(`sealed message over ${mode.name}: decrypted ok, nothing readable before`, res.length === 1 && res[0].text === '' && got && splitPayload([...got]).text === TEXT);
-  }
+  check('crypto  one flipped bit refused', (await open(room.key, bent)) === null);
+  check('crypto  two seals of the same text differ', JSON.stringify(await seal(room.key, PAYLOAD)) !== JSON.stringify(sealed));
+  const { res } = trial(VOIP[0].line, 48000, 7, sealed);
+  const got = res[0]?.sealed && (await open(room.key, res[0].sealed));
+  check('crypto  sealed message over bad VoIP: decrypted ok, nothing readable before', res.length === 1 && res[0].text === '' && got && splitPayload([...got]).text === TEXT);
 }
 
-console.log(fail ? `\n${fail} FAILED` : '\nall required passed');
+console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

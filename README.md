@@ -17,25 +17,21 @@ Alone? Tick **LOCAL ECHO**, and your own mic decodes what your speakers send.
 
 Want the full nostalgia hit? Press **ATDT ☎** for a synthesized dial-up handshake.
 
-## Modes
+## How it survives a phone call
 
-The receiver listens to every mode at once, so only the sender has to choose.
+Phone calls are hostile to modems. Voice codecs drop 20 ms packets, jitter buffers cut and stretch time, and noise suppression deletes steady tones. So SCREECHNET speaks one mode, **TANK** (~34 bit/s), built for exactly that and borrowing ideas from ham-radio modes like FT8 and Olivia:
 
-| Mode | Speed | Use it for | How |
-|---|---|---|---|
-| **TANK** (default) | ~34 bit/s | real phone calls, bad lines | 16-tone MFSK, Costas-array sync, K=7 convolutional code with soft Viterbi decoding, bit interleaving, CRC-16 per 8-byte block |
-| ROBUST | 100 baud | clean calls | 2-FSK 1600/2000 Hz, UART 8N1 framing |
-| BELL 103 | 300 baud | the 1962 classic | 2-FSK 1070/1270 Hz |
-| BELL 202 | 1200 baud | same room only | 2-FSK 1200/2200 Hz |
-
-Phone calls are hostile to modems. Voice codecs drop 20 ms packets, jitter buffers cut and stretch time, and noise suppression deletes steady tones. TANK is built for that, borrowing ideas from ham-radio modes like FT8 and Olivia:
-
-- **Tones hop every 40 ms**, so noise suppression doesn't treat the signal as a steady whine.
-- **Forward error correction plus interleaving** turn a dropped packet into scattered bit errors that the decoder repairs.
-- **A re-sync marker precedes every block.** The receiver finds the symbol timing with a Viterbi search over time offsets. If a block fails its CRC, it retries other timing hypotheses and lets the data decide.
+- **16 tones, hopping every 40 ms** (MFSK16, 800–1550 Hz), so noise suppression doesn't treat the signal as a steady whine.
+- **A Costas array** marks the start of a message, so the receiver can find it even deep in noise.
+- **A K=7 convolutional code with soft-decision Viterbi decoding, plus bit interleaving**, turns a dropped packet into scattered bit errors that the decoder repairs.
+- **A re-sync marker and a CRC-16 on every 8-byte block.** The receiver tracks symbol timing with a Viterbi search over time offsets. If a block fails its CRC, it retries other timing hypotheses and lets the data decide.
 - **A block that is still lost shows up as `░░░`** instead of taking the whole message down.
 
-In the loopback simulation (`npm test`), on a "bad VoIP" line (5% packet loss, jitter, 6 dB SNR), TANK delivers 12/12 messages intact, while the classic FSK modes deliver 0–1/12.
+The loopback simulation (`npm test`) sends messages over simulated calls:
+- **Bad VoIP** (5% packet loss, jitter, 6 dB SNR): 12/12 messages arrive intact.
+- **Brutal VoIP** (8% loss, jitter every ~0.5 s, 3 dB SNR): about 80% of blocks still get through.
+
+A plain two-tone FSK modem (Bell 103 style), which this project started with, got 0/12 on the bad line.
 
 ## Private line (end-to-end encryption)
 
@@ -69,11 +65,11 @@ The test has no dependencies and runs on Node 20+.
 
 | File | What |
 |---|---|
-| `modem.js` | modes, framing, FSK/MFSK modulators, frame parsers, dial-up handshake synth |
-| `demod.js` | `FskDemod` (sliding matched filter + UART) and `MfskDemod` (Goertzel bank, Costas hunt, block decoding) |
+| `modem.js` | payload format, MFSK modulator, block assembler, dial-up handshake synth |
+| `demod.js` | `MfskDemod`: Goertzel tone bank, Costas hunt, per-block timing search and decoding |
 | `fec.js` | CRC-16, convolutional code, soft Viterbi, interleaver, Gray mapping |
 | `crypto.js` | room key derivation, seal/open |
-| `rx-worklet.js` | AudioWorklet running all demodulators at once |
+| `rx-worklet.js` | AudioWorklet running the demodulator on the microphone |
 | `app.js` | UI: LEDs, waterfall, terminal, compose |
 
 ## License

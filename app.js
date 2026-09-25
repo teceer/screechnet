@@ -1,4 +1,4 @@
-import { MODES, encodeMessage, payloadBytes, splitPayload, FrameParser, BlockAssembler, synthHandshake, airtime } from './modem.js';
+import { MODE, encodeMessage, payloadBytes, splitPayload, BlockAssembler, synthHandshake, airtime } from './modem.js';
 import { deriveRoomKey, seal, open, SEAL_OVERHEAD } from './crypto.js';
 
 const $ = (s) => document.querySelector(s);
@@ -15,10 +15,8 @@ const keyStatus = $('#key-status');
 const enc = new TextEncoder();
 
 let ctx = null, stream = null, analyser = null, txBus = null, rxNode = null;
-let txMode = MODES[0];
 let busy = false;
 let room = null; // { key, fingerprint } — derived from the room key, kept in memory only
-let carriers = MODES.map(() => false);
 
 // ——— storage (per-viewer conveniences only) ———
 const store = {
@@ -108,44 +106,19 @@ function boot() {
   ].forEach((t) => line(t, t.startsWith('READY') ? 'hi' : 'sys'));
 }
 
-// ——— speed selector ———
-const speeds = $('#speeds');
-for (const mode of MODES) {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.className = 'speed';
-  b.setAttribute('role', 'radio');
-  b.dataset.id = mode.id;
-  b.innerHTML = `${mode.name} · ${mode.rate}<small>${mode.hint}</small>`;
-  b.onclick = () => {
-    store.set('screechnet.tx', mode.id);
-    selectMode(mode);
-  };
-  speeds.append(b);
-}
-function selectMode(mode) {
-  txMode = mode;
-  for (const b of speeds.children) b.setAttribute('aria-checked', String(b.dataset.id === mode.id));
-  led('HS', ctx && mode.baud >= 1200);
-  const marks = mode.type === 'mfsk' ? [['', mode.base], ['', mode.base + 15 * mode.spacing]] : [['S', mode.space], ['M', mode.mark]];
-  $('#guides').innerHTML = marks
-    .map(([l, f]) => `<div class="guide" style="left:${(f / 4000) * 100}%"><b>${l}</b></div>`)
-    .join('');
-  updateEta();
-}
-
-// ——— meters ———
-const meters = $('#meters');
-meters.innerHTML =
+// ——— band guides & meters ———
+$('#guides').innerHTML = [MODE.base, MODE.base + 15 * MODE.spacing]
+  .map((f) => `<div class="guide" style="left:${(f / 4000) * 100}%"></div>`)
+  .join('');
+$('#meters').innerHTML =
   `<div class="meter" id="m-in">IN <span class="bar"><i></i></span></div>` +
-  MODES.map((m, k) => `<div class="meter" id="m-${k}">${m.id === 'tank' ? 'TANK' : m.baud} <span class="bar"><i></i></span></div>`).join('');
+  `<div class="meter" id="m-sync">SYNC <span class="bar"><i></i></span></div>`;
+let carrier = false;
 function updateMeters({ rms, lock }) {
   const db = 20 * Math.log10(rms + 1e-9);
   $('#m-in i').style.width = Math.max(0, Math.min(100, ((db + 70) / 70) * 100)) + '%';
-  lock.forEach((l, k) => {
-    $(`#m-${k} i`).style.width = Math.min(100, (l / 0.5) * 100) + '%';
-    $(`#m-${k}`).classList.toggle('lock', carriers[k]);
-  });
+  $('#m-sync i').style.width = (carrier ? 100 : Math.min(100, (lock / 0.35) * 100)) + '%';
+  $('#m-sync').classList.toggle('lock', carrier);
 }
 
 // ——— receive ———
@@ -171,47 +144,37 @@ async function tryOpen(v) {
   v.end(true, `${link} · 🔓 DECRYPTED`);
 }
 
-const rx = MODES.map((mode) => {
-  const s = { mode, view: null };
-  const h = {
-    onStart: () => {
-      s.view = msgEl('in', `${stamp()}  RING · CONNECT ${mode.rate} ${mode.name}`);
-    },
-    onNick: (n) => s.view?.nick(n),
-    onText: (t) => s.view?.text(t),
-    onSealed: () => s.view?.sealed(),
-    onCipher: (b) => s.view?.cipher(b),
-    onEnd: ({ ok, reason, sealed }) => {
-      const v = s.view;
-      s.view = null;
-      line('NO CARRIER');
-      if (!v) return;
-      const link = ok ? (mode.type === 'mfsk' ? '✓ FEC OK' : '✓ CRC OK') : `✗ ${reason}`;
-      if (!v.el.classList.contains('sealed')) return v.end(ok, link);
-      if (!sealed) return v.end(false, `${link} · DAMAGED ON THE LINE, CAN'T DECRYPT`);
-      v.pending = { sealed, link, linkOk: ok };
-      tryOpen(v);
-    },
-  };
-  s.parser = mode.type === 'mfsk' ? new BlockAssembler(h) : new FrameParser(mode, h);
-  return s;
+const view = { current: null };
+const parser = new BlockAssembler({
+  onStart: () => {
+    view.current = msgEl('in', `${stamp()}  RING · CONNECT ${MODE.rate} ${MODE.name}`);
+  },
+  onNick: (n) => view.current?.nick(n),
+  onText: (t) => view.current?.text(t),
+  onSealed: () => view.current?.sealed(),
+  onCipher: (b) => view.current?.cipher(b),
+  onEnd: ({ ok, reason, sealed }) => {
+    const v = view.current;
+    view.current = null;
+    line('NO CARRIER');
+    if (!v) return;
+    const link = ok ? '✓ FEC OK' : `✗ ${reason}`;
+    if (!v.el.classList.contains('sealed')) return v.end(ok, link);
+    if (!sealed) return v.end(false, `${link} · DAMAGED ON THE LINE, CAN'T DECRYPT`);
+    v.pending = { sealed, link, linkOk: ok };
+    tryOpen(v);
+  },
 });
 
 function onRx({ data: m }) {
-  if (m.t === 'byte') {
-    rx[m.k].parser.push(m.b);
-    blink('RD');
-  } else if (m.t === 'hdr') rx[m.k].parser.header(m.len);
+  if (m.t === 'hdr') parser.header(m.len);
   else if (m.t === 'blk') {
-    rx[m.k].parser.block(m.bytes, m.ok);
+    parser.block(m.bytes, m.ok);
     blink('RD', 120);
-  } else if (m.t === 'end') rx[m.k].parser.end();
-  else if (m.t === 'lost') rx[m.k].parser.carrierLost();
-  else if (m.t === 'cd') {
-    carriers[m.k] = m.on;
-    led('CD', carriers.some(Boolean));
-    if (!m.on && MODES[m.k].type === 'fsk') rx[m.k].parser.carrierLost();
-  } else if (m.t === 'stat') updateMeters(m);
+  } else if (m.t === 'end') parser.end();
+  else if (m.t === 'lost') parser.carrierLost();
+  else if (m.t === 'cd') led('CD', (carrier = m.on));
+  else if (m.t === 'stat') updateMeters(m);
 }
 
 const mute = (v) => rxNode?.port.postMessage({ t: 'mute', v: v && !echoBox.checked });
@@ -231,7 +194,6 @@ async function powerOn() {
   term.textContent = '';
   led('MR', true);
   led('TR', true);
-  selectMode(txMode);
   line('ATZ', 'hi');
   line('OK');
   line(`SAMPLE RATE ${ctx.sampleRate} HZ`);
@@ -247,7 +209,7 @@ async function powerOn() {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [1],
-      processorOptions: { modes: MODES },
+      processorOptions: { mode: MODE },
     });
     rxNode.port.onmessage = onRx;
     const sink = ctx.createGain();
@@ -274,8 +236,8 @@ async function powerOff() {
   await ctx?.close();
   ctx = stream = analyser = txBus = rxNode = null;
   busy = false;
-  carriers = MODES.map(() => false);
-  rx.forEach((s) => s.parser.reset());
+  carrier = false;
+  parser.carrierLost();
   Object.keys(leds).forEach((n) => led(n, false));
   msgBox.disabled = dialBtn.disabled = sendBtn.disabled = true;
   line('');
@@ -307,11 +269,11 @@ async function transmit(text) {
   const r = room;
   const { payload: plain, textOffset } = payloadBytes(nick, text);
   const payload = r ? await seal(r.key, plain) : plain;
-  const { samples, payloadEnds } = encodeMessage(txMode, payload, ctx.sampleRate);
+  const { samples, payloadEnds } = encodeMessage(payload, ctx.sampleRate);
   setBusy(true);
   mute(true);
 
-  const view = msgEl('out', `${stamp()}  ATDT · SENDING ${txMode.rate} ${txMode.name} · ${payload.length} BYTES` +
+  const view = msgEl('out', `${stamp()}  ATDT · SENDING ${MODE.rate} ${MODE.name} · ${payload.length} BYTES` +
     (r ? ` · 🔒 AES-GCM KEY ${r.fingerprint}` : ''));
   view.nick((r ? '🔒 ' : '') + (nick || 'anon'));
   // for each character: how many payload bytes must be on the air before it's shown as sent
@@ -380,7 +342,7 @@ function updateEta() {
   const text = msgBox.value;
   $('#count').textContent = `${Array.from(text).length}/280`;
   const n = payloadBytes(nickBox.value.trim(), text).payload.length + (keyBox.value ? SEAL_OVERHEAD : 0);
-  $('#eta').textContent = `≈ ${airtime(txMode, n).toFixed(1)} s on air · ${txMode.name} ${txMode.rate}${keyBox.value ? ' · encrypted' : ''}`;
+  $('#eta').textContent = `≈ ${airtime(n).toFixed(1)} s on air${keyBox.value ? ' · encrypted' : ''}`;
   sendBtn.textContent = keyBox.value ? 'TRANSMIT 🔒' : 'TRANSMIT ▶';
   sendBtn.disabled = !ctx || busy || !text.trim() || (!!keyBox.value && !room);
 }
@@ -480,7 +442,7 @@ function draw() {
 // ——— init ———
 nickBox.value = store.get('screechnet.nick') || '';
 echoBox.checked = store.get('screechnet.echo') === '1';
-selectMode(MODES.find((m) => m.id === store.get('screechnet.tx')) || MODES[0]);
+updateEta();
 boot();
 requestAnimationFrame(draw);
 
