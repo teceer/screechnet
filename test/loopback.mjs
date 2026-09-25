@@ -89,7 +89,7 @@ function receive(samples, fs) {
   return results;
 }
 
-const TEXT = 'Hello from 1995! Zażółć gęślą jaźń 🦖 ATDT';
+const TEXT = 'Hello from 1995! Naïve café, jalapeño & façade 🦖 ATDT';
 const lines = [
   { name: 'clean', snrDb: 60, drift: 1, gain: 1 },
   { name: 'quiet+noisy 12dB', snrDb: 12, drift: 1.0002, gain: 0.05 },
@@ -103,11 +103,11 @@ const MIN_TANK_INTACT = { 'bad VoIP (5% loss, jitter ~2 s, 6 dB)': 10 }; // of 1
 
 function trial(mode, line, fs, seed) {
   const rnd = mulberry(seed);
-  const { samples } = encodeMessage(mode, payloadBytes('wojtek', TEXT).payload, fs);
+  const { samples } = encodeMessage(mode, payloadBytes('alice', TEXT).payload, fs);
   const res = receive(phoneLine(samples, fs, line, rnd), fs);
   const k = MODES.indexOf(mode);
   const mine = res[k];
-  const good = mine.length === 1 && mine[0].ok && mine[0].text === TEXT && mine[0].nick === 'wojtek';
+  const good = mine.length === 1 && mine[0].ok && mine[0].text === TEXT && mine[0].nick === 'alice';
   const okGhosts = res.filter((_, j) => j !== k).flat().filter((g) => g.ok).length;
   return { good, okGhosts, mine };
 }
@@ -133,7 +133,7 @@ for (const fs of [44100, 48000]) {
 
 // VoIP lines: messages fully intact / FEC blocks lost, per mode, over random channels.
 // (FSK modes have no blocks: one error kills the whole message.)
-const blocks = Math.ceil(payloadBytes('wojtek', TEXT).payload.length / 8);
+const blocks = Math.ceil(payloadBytes('alice', TEXT).payload.length / 8);
 for (const [name, line] of Object.entries(VOIP)) {
   console.log(`\n${name}, 12 random channels @48k:`);
   for (const mode of MODES) {
@@ -157,7 +157,7 @@ for (const [name, line] of Object.entries(VOIP)) {
     if (!cond) fail++;
     console.log(`${cond ? 'PASS' : 'FAIL'}  crypto  ${name}`);
   };
-  const plain = payloadBytes('wojtek', TEXT).payload;
+  const plain = payloadBytes('alice', TEXT).payload;
   const t0 = Date.now();
   const room = await deriveRoomKey('correct horse battery staple');
   const ms = Date.now() - t0;
