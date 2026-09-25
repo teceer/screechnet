@@ -48,7 +48,7 @@ Honest caveats: it is a toy, not Signal.
 
 ## Analytics
 
-The hosted page sends anonymous usage events to PostHog (EU cloud), proxied through `/ingest`. Every event is explicit, and there is no autocapture, no session recording and no cookies. Events: power on, message sent or received, decrypt result, handshake, share clicks. The only fields sent are counts and flags such as byte length, "encrypted" and "blocks lost". Message text, handles and room keys are never sent. Analytics is off on `localhost` and when the browser sends Do Not Track. See `analytics.js`. If you fork the project, swap in your own key or remove the import.
+The hosted page counts cookieless page views with Vercel Web Analytics. It also sends anonymous usage events to PostHog (EU cloud), proxied through `/ingest`. Every event is explicit, and there is no autocapture, no session recording and no cookies. Events: power on, message sent or received, decrypt result, handshake, share clicks. The only fields sent are counts and flags such as byte length, "encrypted" and "blocks lost". Message text, handles and room keys are never sent. Analytics is off on `localhost` and when the browser sends Do Not Track. See `analytics.js`. If you fork the project, swap in your own key or remove the import.
 
 ## Run locally
 
