@@ -1,0 +1,13 @@
+{
+  "name": "screechnet",
+  "version": "1.0.0",
+  "description": "The internet, over a phone call. Your laptop is the modem, a phone call on speaker is the line.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node test/loopback.mjs",
+    "dev": "python3 -m http.server 8000"
+  },
+  "engines": { "node": ">=20" }
+}

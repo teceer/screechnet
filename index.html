@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SCREECHNET</title>
+  <meta name="description" content="Your laptop is the modem. A phone call on speaker is the line. Send text as sound, the 1995 way.">
+  <meta property="og:title" content="SCREECHNET — the internet, over a phone call">
+  <meta property="og:description" content="Your laptop is the modem. A phone call on speaker is the line. Send text as sound, the 1995 way.">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=VT323&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+<main class="wrap">
+  <header class="masthead">
+    <h1 class="logo">SCREECH<span>NET</span></h1>
+    <p class="tag">The internet, over a phone call. Literally.<br>
+      Your laptop is the modem. Your phone on speaker is the line.</p>
+  </header>
+
+  <section class="modem" aria-label="Modem front panel">
+    <div class="modem-face">
+      <div class="badge">
+        <b>SCREECHNET</b>
+        <small>Sportster-ish Voice/Data/Vibes</small>
+      </div>
+      <div class="leds">
+        <div class="led" data-led="HS" title="High speed (BELL 202)"><i></i><span>HS</span></div>
+        <div class="led" data-led="AA" title="Auto answer — listening"><i></i><span>AA</span></div>
+        <div class="led" data-led="CD" title="Carrier detect"><i></i><span>CD</span></div>
+        <div class="led" data-led="OH" title="Off hook"><i></i><span>OH</span></div>
+        <div class="led" data-led="RD" title="Receive data"><i></i><span>RD</span></div>
+        <div class="led" data-led="SD" title="Send data"><i></i><span>SD</span></div>
+        <div class="led" data-led="TR" title="Terminal ready"><i></i><span>TR</span></div>
+        <div class="led" data-led="MR" title="Modem ready"><i></i><span>MR</span></div>
+      </div>
+    </div>
+    <div class="modem-controls">
+      <button id="power" class="power" type="button" aria-pressed="false">
+        <span class="rocker" aria-hidden="true"></span><span class="power-label">POWER</span>
+      </button>
+      <div class="speeds" id="speeds" role="radiogroup" aria-label="Transmit speed"></div>
+      <div class="extras">
+        <label class="echo" title="Decode your own transmissions: test with one computer">
+          <input type="checkbox" id="echo"> LOCAL ECHO
+        </label>
+        <button id="dial" class="dial" type="button" disabled>ATDT ☎</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="crt" aria-label="Terminal">
+    <div class="screen">
+      <div class="fall-wrap">
+        <canvas id="fall" aria-label="Audio spectrum waterfall, 0 to 4 kHz"></canvas>
+        <div class="guides" id="guides"></div>
+        <div class="axis"><span>0</span><span>1k</span><span>2k</span><span>3k</span><span>4 kHz</span></div>
+      </div>
+      <div class="meters" id="meters"></div>
+      <div id="term" class="term" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <form id="compose" class="compose" autocomplete="off">
+    <div class="compose-row">
+      <label class="field"><span>HANDLE</span><input id="nick" maxlength="16" placeholder="anon" spellcheck="false"></label>
+      <label class="field key-field"><span>ROOM KEY</span><input id="key" type="password" placeholder="none: plain text" autocomplete="off" spellcheck="false"><button type="button" id="key-eye" class="eye" aria-label="Show room key" aria-pressed="false">show</button></label>
+    </div>
+    <div id="key-status" class="key-status" aria-live="polite">🔓 OPEN LINE: anyone on the call can decode your messages</div>
+    <textarea id="msg" maxlength="280" rows="2" placeholder="Type a message. It will leave through your speakers as sound." disabled></textarea>
+    <div class="compose-row">
+      <span class="meta-row"><span id="count" class="count">0/280</span> · <span id="eta" class="eta"></span></span>
+      <button type="submit" id="send" class="send" disabled>TRANSMIT ▶</button>
+    </div>
+  </form>
+
+  <section class="how">
+    <h2>How to go online like it's 1995</h2>
+    <ol>
+      <li><b>Call a friend.</b> Any phone call. Put it on speaker.</li>
+      <li><b>Both open this page</b> and flip POWER. Allow the microphone.</li>
+      <li><b>Lay the phone next to your laptop</b> and turn the volume up.</li>
+      <li><b>Type, hit TRANSMIT.</b> Your message screeches down the line and types itself out on their screen.</li>
+    </ol>
+    <div class="notes">
+      <p><b>Alone?</b> Tick LOCAL ECHO and your own mic decodes what your speakers send.</p>
+      <p><b>For phone calls use TANK.</b> It hops between 16 tones, carries error correction and survives dropped packets and jittery calls. If a piece is lost anyway, you get ░░░ in its place instead of losing the whole message. It also helps to turn off noise cancellation or "voice isolation" on the call.</p>
+      <p><b>Private line.</b> Agree on a room key with your friend and both type it in. What leaves your speakers is then AES-GCM ciphertext: anyone listening to the call hears the screech but reads nothing. Read the 3-part key ID (e.g. <code>3F-A9-C2</code>) to each other to confirm you typed the same key. Don't say the key itself on the call. Your browser derives the key with PBKDF2 (600k rounds), and the key never leaves your device. Use a long passphrase: whoever records the call can try to guess it offline.</p>
+      <p><b>How it works:</b> The classic modes use frequency-shift keying, like the Bell 103 from 1962. Every bit becomes one of two tones and every byte is sent as a start bit, 8 data bits and a stop bit. TANK works like modern ham-radio modes such as FT8 and Olivia: 16-tone MFSK, a Costas array for sync, a K=7 convolutional code with soft Viterbi decoding, bit interleaving and a re-sync marker before every 8-byte block. The receiver listens on all speeds at once. No server is involved. The only network is the phone call.</p>
+    </div>
+    <a id="share" class="share" target="_blank" rel="noopener">Post it on X</a>
+  </section>
+
+  <footer>No servers. No packets. Just sound.</footer>
+</main>
+</body>
+</html>
