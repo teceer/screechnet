@@ -1,5 +1,6 @@
 import { MODE, encodeMessage, payloadBytes, splitPayload, BlockAssembler, synthHandshake, airtime } from './modem.js';
 import { deriveRoomKey, seal, open, SEAL_OVERHEAD } from './crypto.js';
+import { track } from './analytics.js';
 
 const $ = (s) => document.querySelector(s);
 const term = $('#term');
@@ -129,16 +130,19 @@ async function tryOpen(v) {
   const { sealed, link, linkOk } = v.pending;
   if (!room) {
     locked.add(v);
+    track('message_decrypt', { result: 'no_key' });
     return v.end(false, `${link} · 🔒 ENCRYPTED: ENTER THE ROOM KEY TO READ`, 'locked');
   }
   const r = room, pt = await open(r.key, sealed);
   if (r !== room) return; // key changed meanwhile; the change retries it
   if (!pt) {
+    track('message_decrypt', { result: linkOk ? 'wrong_key' : 'damaged' });
     if (!linkOk) return v.end(false, `${link} · DAMAGED ON THE LINE, CAN'T DECRYPT`);
     locked.add(v);
     return v.end(false, `${link} · 🔒 WRONG ROOM KEY (sender used another one)`, 'locked');
   }
   locked.delete(v);
+  track('message_decrypt', { result: 'ok' });
   const { nick, text } = splitPayload([...pt]);
   await v.reveal(nick, text);
   v.end(true, `${link} · 🔓 DECRYPTED`);
@@ -159,6 +163,14 @@ const parser = new BlockAssembler({
     line('NO CARRIER');
     if (!v) return;
     const link = ok ? '✓ FEC OK' : `✗ ${reason}`;
+    const lost = reason?.match(/(\d+)\/(\d+)/);
+    track('message_received', {
+      ok,
+      encrypted: v.el.classList.contains('sealed'),
+      lost_carrier: reason === 'NO CARRIER',
+      blocks_lost: lost ? +lost[1] : 0,
+      blocks: lost ? +lost[2] : undefined,
+    });
     if (!v.el.classList.contains('sealed')) return v.end(ok, link);
     if (!sealed) return v.end(false, `${link} · DAMAGED ON THE LINE, CAN'T DECRYPT`);
     v.pending = { sealed, link, linkOk: ok };
@@ -216,11 +228,13 @@ async function powerOn() {
     sink.gain.value = 0;
     mic.connect(rxNode).connect(sink).connect(ctx.destination);
     line('ATS0=1', 'hi');
-    line('OK — AUTO ANSWER. LISTENING ON ALL SPEEDS');
+    line('OK — AUTO ANSWER. LISTENING');
+    track('power_on', { mic: true, sample_rate: ctx.sampleRate });
     led('AA', true);
     led('OH', true);
   } catch (e) {
     line(`NO MICROPHONE (${e.message || e.name}). TRANSMIT ONLY.`, 'err');
+    track('power_on', { mic: false, mic_error: e.name, sample_rate: ctx.sampleRate });
   }
   line('');
   line('READY. TYPE BELOW AND HIT TRANSMIT.', 'hi');
@@ -273,6 +287,13 @@ async function transmit(text) {
   setBusy(true);
   mute(true);
 
+  track('message_sent', {
+    bytes: payload.length,
+    chars: Array.from(text).length,
+    encrypted: !!r,
+    airtime_s: +airtime(payload.length).toFixed(1),
+    local_echo: echoBox.checked,
+  });
   const view = msgEl('out', `${stamp()}  ATDT · SENDING ${MODE.rate} ${MODE.name} · ${payload.length} BYTES` +
     (r ? ` · 🔒 AES-GCM KEY ${r.fingerprint}` : ''));
   view.nick((r ? '🔒 ' : '') + (nick || 'anon'));
@@ -309,6 +330,7 @@ async function transmit(text) {
 
 async function dial() {
   if (busy || !ctx) return;
+  track('handshake_played');
   setBusy(true);
   mute(true);
   const hs = synthHandshake(ctx.sampleRate);
@@ -364,6 +386,7 @@ keyBox.addEventListener('input', () => {
     const r = await deriveRoomKey(pass);
     if (gen !== keyGen) return;
     room = r;
+    track('room_key_set');
     setKeyStatus('on', `🔒 PRIVATE LINE · key ID <b>${r.fingerprint}</b>. Read it to your friend: it must match theirs.`);
     updateEta();
     for (const v of [...locked]) tryOpen(v);
@@ -399,6 +422,7 @@ nickBox.addEventListener('input', () => {
   updateEta();
 });
 echoBox.addEventListener('change', () => {
+  track('local_echo_toggled', { on: echoBox.checked });
   store.set('screechnet.echo', echoBox.checked ? '1' : '');
   if (echoBox.checked) mute(false);
 });
@@ -446,6 +470,8 @@ updateEta();
 boot();
 requestAnimationFrame(draw);
 
+$('#share').addEventListener('click', () => track('share_clicked'));
+$('#source').addEventListener('click', () => track('source_clicked'));
 $('#share').href =
   'https://x.com/intent/post?text=' +
   encodeURIComponent('I just sent a message over a phone call with my laptop screeching like a 1995 modem 📞🔊') +
