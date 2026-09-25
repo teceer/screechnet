@@ -48,7 +48,7 @@ Honest caveats: it is a toy, not Signal.
 
 ## Analytics
 
-The hosted page counts cookieless page views with Vercel Web Analytics. It also sends anonymous usage events to PostHog (EU cloud), proxied through `/ingest`. Every event is explicit, and there is no autocapture, no session recording and no cookies. Events: power on, message sent or received, decrypt result, handshake, share clicks. The only fields sent are counts and flags such as byte length, "encrypted" and "blocks lost". Message text, handles and room keys are never sent. Analytics is off on `localhost` and when the browser sends Do Not Track. See `analytics.js`. If you fork the project, swap in your own key or remove the import.
+The hosted page uses Vercel Web Analytics, which sets no cookies. It counts page views and a few custom events: power on, message sent or received, decrypt result, handshake, share clicks. The only fields sent are counts and flags such as byte length, "encrypted" and "blocks lost". Message text, handles and room keys are never sent. See `analytics.js`. Without Vercel Web Analytics, for example on a fork hosted elsewhere, the calls do nothing.
 
 ## Run locally
 
@@ -75,7 +75,7 @@ The test has no dependencies and runs on Node 20+.
 | `crypto.js` | room key derivation, seal/open |
 | `rx-worklet.js` | AudioWorklet running the demodulator on the microphone |
 | `app.js` | UI: LEDs, waterfall, terminal, compose |
-| `analytics.js` | anonymous PostHog events (see Analytics) |
+| `analytics.js` | anonymous usage events (see Analytics) |
 
 ## License
 
