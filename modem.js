@@ -3,20 +3,15 @@
 import { RS } from './crypto.js';
 import { COSTAS, MARK, HEADER_BYTES, BLOCK_BYTES, MAGIC, blockSymbols, encodeBlock } from './fec.js';
 
-// FSK modes: space = bit 0, mark = bit 1 (also the idle "carrier" tone).
-// TANK: 16 hopping tones (base + j·spacing), one per `symbol` seconds, with FEC.
-export const MODES = [
-  { id: 'tank', type: 'mfsk', name: 'TANK', rate: '34 bps', symbol: 0.04, base: 800, spacing: 50, hint: 'bad calls · FEC' },
-  { id: 'robust', type: 'fsk', code: 0x52, name: 'ROBUST', rate: '100 bd', baud: 100, space: 1600, mark: 2000, hint: 'good calls' },
-  { id: 'bell103', type: 'fsk', code: 0x42, name: 'BELL 103', rate: '300 bd', baud: 300, space: 1070, mark: 1270, hint: 'the 1962 classic' },
-  { id: 'bell202', type: 'fsk', code: 0x46, name: 'BELL 202', rate: '1200 bd', baud: 1200, space: 2200, mark: 1200, hint: 'same room only' },
-];
+// TANK: 16 hopping tones (base + j·spacing Hz), one every `symbol` seconds, with FEC.
+// Built for real phone calls: codecs that drop packets, jitter buffers that stretch time,
+// noise suppression that eats steady tones.
+export const MODE = { name: 'TANK', rate: '34 bps', symbol: 0.04, base: 800, spacing: 50 };
 
-export const SYN = 0x16, STX = 0x02, EOT = 0x04, US = 0x1f;
+export const US = 0x1f;
 export const MAX_PAYLOAD = 2048;
-const PREAMBLE = [SYN, SYN, SYN, SYN, STX];
 
-// Payload is the same in every mode: nick, US, UTF-8 text — or, with a room key,
+// Payload: nick, US, UTF-8 text — or, with a room key,
 // that whole thing sealed (see crypto.js), which starts with RS.
 export function payloadBytes(nick, text) {
   const enc = new TextEncoder();
@@ -99,46 +94,19 @@ class PayloadStream {
   }
 }
 
-export function crc16(bytes) {
-  let crc = 0xffff;
-  for (const b of bytes) {
-    crc ^= b << 8;
-    for (let i = 0; i < 8; i++) crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
-  }
-  return crc;
-}
-
-// Frame: SYN×4 STX | CODE LEN_HI LEN_LO | nick US text | CRC_HI CRC_LO | EOT
-// Each byte goes on the air as async 8N1, exactly like a 1990s serial modem.
-export function buildFrame(mode, payload) {
-  const body = [mode.code, payload.length >> 8, payload.length & 0xff, ...payload];
-  const crc = crc16(body);
-  return Uint8Array.from([...PREAMBLE, ...body, crc >> 8, crc & 0xff, EOT]);
-}
-
-const LEAD = 0.3, TAIL = 0.08;
 const WARMUP = [0, 2, 4, 6, 8, 10, 12, 14]; // lets the phone's AGC settle before the Costas sync
 
 const mfskSymbols = (len) =>
   WARMUP.length + COSTAS.length + blockSymbols(HEADER_BYTES) + Math.ceil(len / BLOCK_BYTES) * (MARK.length + blockSymbols(BLOCK_BYTES));
 
 // Seconds on air for a payload of `len` bytes.
-export function airtime(mode, len) {
-  if (mode.type === 'mfsk') return mfskSymbols(len) * mode.symbol + 0.05;
-  const bits = Math.ceil(LEAD * mode.baud) + (len + PREAMBLE.length + 6) * 10 + Math.ceil(TAIL * mode.baud);
-  return bits / mode.baud;
-}
+export const airtime = (len) => mfskSymbols(len) * MODE.symbol + 0.05;
 
 // Payload → audio. payloadEnds[i] = time at which payload byte i is fully on air.
-export function encodeMessage(mode, payload, fs) {
-  if (mode.type === 'mfsk') {
-    const { samples } = modulateMfsk(mode, payload, fs);
-    const before = WARMUP.length + COSTAS.length + blockSymbols(HEADER_BYTES), per = MARK.length + blockSymbols(BLOCK_BYTES);
-    const payloadEnds = payload.map((_, i) => (before + per * (Math.floor(i / BLOCK_BYTES) + 1)) * mode.symbol);
-    return { samples, payloadEnds };
-  }
-  const { samples, byteTimes } = modulate(mode, buildFrame(mode, payload), fs);
-  const payloadEnds = payload.map((_, i) => byteTimes[PREAMBLE.length + 3 + i] + 10 / mode.baud);
+export function encodeMessage(payload, fs) {
+  const { samples } = modulate(payload, fs);
+  const before = WARMUP.length + COSTAS.length + blockSymbols(HEADER_BYTES), per = MARK.length + blockSymbols(BLOCK_BYTES);
+  const payloadEnds = payload.map((_, i) => (before + per * (Math.floor(i / BLOCK_BYTES) + 1)) * MODE.symbol);
   return { samples, payloadEnds };
 }
 
@@ -154,7 +122,7 @@ export function mfskTones(payload) {
 }
 
 // Continuous-phase MFSK: one of 16 tones per symbol.
-export function modulateMfsk(mode, payload, fs, amp = 0.7) {
+export function modulate(payload, fs, amp = 0.7, mode = MODE) {
   const tones = mfskTones(payload);
   const sps = fs * mode.symbol;
   const n = Math.ceil(tones.length * sps + 0.05 * fs);
@@ -170,105 +138,7 @@ export function modulateMfsk(mode, payload, fs, amp = 0.7) {
   return { samples: out, duration: n / fs };
 }
 
-// Continuous-phase FSK. Returns samples plus the air time at which each byte starts.
-export function modulate(mode, bytes, fs, amp = 0.7) {
-  const bits = [];
-  for (let i = Math.ceil(LEAD * mode.baud); i > 0; i--) bits.push(1);
-  const byteBits = [];
-  for (const b of bytes) {
-    byteBits.push(bits.length);
-    bits.push(0);
-    for (let k = 0; k < 8; k++) bits.push((b >> k) & 1);
-    bits.push(1);
-  }
-  for (let i = Math.ceil(TAIL * mode.baud); i > 0; i--) bits.push(1);
-
-  const spb = fs / mode.baud;
-  const n = Math.ceil(bits.length * spb);
-  const out = new Float32Array(n);
-  const ramp = Math.round(0.005 * fs);
-  const wm = (2 * Math.PI * mode.mark) / fs, ws = (2 * Math.PI * mode.space) / fs;
-  let ph = 0;
-  for (let i = 0; i < n; i++) {
-    ph += bits[Math.min(bits.length - 1, Math.floor(i / spb))] ? wm : ws;
-    if (ph > 2 * Math.PI) ph -= 2 * Math.PI;
-    const g = i < ramp ? i / ramp : i > n - ramp ? (n - i) / ramp : 1;
-    out[i] = amp * g * Math.sin(ph);
-  }
-  return { samples: out, byteTimes: byteBits.map((b) => b / mode.baud), duration: n / fs };
-}
-
-// Byte-level receiver for one FSK mode. Hunts for SYN SYN STX, then reads the frame,
-// streaming decoded text out as it arrives so it "types itself" on screen.
-export class FrameParser {
-  constructor(mode, handlers) {
-    this.mode = mode;
-    this.h = handlers;
-    this.reset();
-  }
-
-  reset() {
-    this.st = 'hunt';
-    this.sr = 0;
-    this.out = null;
-  }
-
-  push(b) {
-    switch (this.st) {
-      case 'hunt':
-        this.sr = ((this.sr << 8) | b) & 0xffffff;
-        if (this.sr === ((SYN << 16) | (SYN << 8) | STX)) this.st = 'code';
-        break;
-      case 'code':
-        if (b === this.mode.code) {
-          this.body = [b];
-          this.st = 'len1';
-        } else this.reset();
-        break;
-      case 'len1':
-        this.body.push(b);
-        this.len = b << 8;
-        this.st = 'len2';
-        break;
-      case 'len2':
-        this.body.push(b);
-        this.len |= b;
-        if (this.len === 0 || this.len > MAX_PAYLOAD) return this.reset();
-        this.got = 0;
-        this.out = new PayloadStream(this.h);
-        this.st = 'payload';
-        this.h.onStart?.();
-        break;
-      case 'payload':
-        this.body.push(b);
-        this.out.push(b);
-        if (++this.got === this.len) this.st = 'crc1';
-        break;
-      case 'crc1':
-        this.crc = b << 8;
-        this.st = 'crc2';
-        break;
-      case 'crc2': {
-        const ok = crc16(this.body) === (this.crc | b);
-        this.finish(ok, ok ? null : 'CRC ERROR (line noise)');
-        break;
-      }
-    }
-  }
-
-  finish(ok, reason) {
-    const sealed = this.out.end();
-    this.h.onEnd?.({ ok, reason, sealed });
-    this.reset();
-  }
-
-  carrierLost() {
-    if (this.out) this.finish(false, 'NO CARRIER');
-    else this.reset();
-  }
-}
-
-// Receiver side for TANK: the demodulator hands over FEC-decoded blocks; a block that
+// Receiver side: the demodulator hands over FEC-decoded blocks; a block that
 // fails its CRC shows up as ░ instead of taking the whole message down with it.
 export class BlockAssembler {
   constructor(handlers) {
